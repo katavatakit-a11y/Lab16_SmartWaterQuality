@@ -19,6 +19,10 @@
 
 ## ฮาร์ดแวร์และเซนเซอร์
 
+### Wiring Diagram
+
+![Wiring diagram ของ Lab16 Smart Water Quality แสดงการต่อ ESP32 กับ RS-485/เซนเซอร์ Modbus, รีเลย์ 3 ตัว, จอ OLED, DHT11 และปุ่มกด](assets/wiring-diagram.svg)
+
 ### ขา GPIO ทั้งหมดที่ใช้งาน (จาก `pins_config.h`)
 
 | GPIO | ชื่อในโค้ด | ใช้กับ | หมายเหตุ |
