@@ -27,7 +27,7 @@ const char DASHBOARD_HTML[] PROGMEM = R"HTMLPAGE(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Smart Water Quality (BOI-SUT)</title>
+<title>Smart Water Quality</title>
 <style>
 /* ---- ฟอนต์ Prompt เสิร์ฟจากตัวบอร์ดเอง (ดู fonts_data.h) ---- */
 @font-face{font-family:'Prompt';font-style:normal;font-weight:400;font-display:swap;
@@ -77,11 +77,6 @@ header{
   color:#fff;box-shadow:0 6px 22px rgba(15,118,110,.22);
 }
 h1{font-size:1.4rem;font-weight:700;letter-spacing:.2px;line-height:1.2}
-h1 .org{
-  display:inline-block;margin-left:8px;font-size:.76rem;font-weight:700;
-  padding:3px 10px;border-radius:999px;background:rgba(255,255,255,.18);
-  border:1px solid rgba(255,255,255,.35);vertical-align:middle;letter-spacing:.6px;
-}
 .sub{font-size:.79rem;opacity:.9;margin-top:4px}
 .clock{margin-left:auto;text-align:right;line-height:1.2}
 .clock b{font-size:1.7rem;font-variant-numeric:tabular-nums;letter-spacing:1px}
@@ -266,7 +261,7 @@ footer{text-align:center;color:var(--dim);font-size:.74rem;padding:22px 0 8px}
 
   <header>
     <div>
-      <h1>Smart Water Quality <span class="org">BOI-SUT</span></h1>
+      <h1>Smart Water Quality</h1>
       <div class="sub">ระบบเฝ้าระวังและปรับคุณภาพน้ำอัตโนมัติ &middot; ESP32 Devkit V2</div>
       <div class="pills">
         <span class="pill on" id="pAp">AP</span>
@@ -379,7 +374,7 @@ footer{text-align:center;color:var(--dim);font-size:.74rem;padding:22px 0 8px}
     </p>
   </div>
 
-  <footer>Smart Water Quality (BOI-SUT) &middot; ESP32 Devkit V2 &middot; Lab16 &middot; uptime <span id="up">0</span></footer>
+  <footer>Smart Water Quality &middot; ESP32 Devkit V2 &middot; Lab16 &middot; uptime <span id="up">0</span></footer>
 </div>
 
 <script>
