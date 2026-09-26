@@ -252,6 +252,31 @@ select{flex:1;min-width:96px}
 .netk{font-size:.71rem;color:var(--dim);text-transform:uppercase;letter-spacing:.8px;margin-bottom:5px;font-weight:700}
 .netv{font-size:1.02rem;font-weight:700;font-family:Consolas,monospace;color:var(--mono);word-break:break-all}
 
+/* ---------- ข้อมูลย้อนหลัง ---------- */
+.hist-actions{display:flex;gap:10px;margin-bottom:12px;flex-wrap:wrap}
+.hist-actions button,.hist-actions a{
+  padding:8px 16px;border:0;border-radius:10px;cursor:pointer;
+  font-size:.79rem;font-weight:700;font-family:inherit;text-decoration:none;
+  background:var(--bg2);color:var(--txt);border:1px solid var(--line);transition:.18s;
+}
+.hist-actions a{background:var(--acc);color:#fff;border-color:transparent;box-shadow:0 2px 8px rgba(13,148,136,.3)}
+.hist-actions button:hover{background:#cfe6e3}
+.hist-actions a:hover{background:var(--acc-dk)}
+.hist-wrap{max-height:340px;overflow:auto;border:1px solid var(--line);border-radius:12px}
+.hist-table{width:100%;min-width:480px;border-collapse:collapse;font-size:.78rem;font-variant-numeric:tabular-nums}
+.hist-table thead th{
+  position:sticky;top:0;background:var(--bg2);color:var(--dim);white-space:nowrap;
+  font-weight:700;text-align:right;padding:8px 10px;border-bottom:1px solid var(--line);
+}
+.hist-table thead th:first-child{text-align:left}
+.hist-table td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line);white-space:nowrap}
+.hist-table td:first-child{text-align:left;color:var(--dim)}
+.hist-table tr:last-child td{border-bottom:0}
+.hist-table .v-good{color:var(--good);font-weight:700}
+.hist-table .v-watch{color:var(--warn);font-weight:700}
+.hist-table .v-bad{color:var(--bad);font-weight:700}
+.hist-empty{padding:20px;text-align:center;color:var(--dim);font-size:.82rem}
+
 footer{text-align:center;color:var(--dim);font-size:.74rem;padding:22px 0 8px}
 .dead{opacity:.45;pointer-events:none}
 </style>
@@ -336,6 +361,24 @@ footer{text-align:center;color:var(--dim);font-size:.74rem;padding:22px 0 8px}
     </div>
   </div>
 
+  <!-- ข้อมูลย้อนหลัง -->
+  <div class="card" style="margin-bottom:16px">
+    <h3>ข้อมูลย้อนหลัง <span style="font-weight:400;text-transform:none;letter-spacing:0">(บันทึกทุก 15 นาที)</span></h3>
+    <div class="hist-actions">
+      <button onclick="loadHistory()">รีเฟรชตาราง</button>
+      <a href="/api/export" download>⬇ ดาวน์โหลด Excel (.csv)</a>
+    </div>
+    <div class="hist-wrap">
+      <table class="hist-table">
+        <thead><tr>
+          <th>เวลา</th><th>pH</th><th>EC</th><th>น้ำ °C</th><th>TDS</th><th>คุณภาพน้ำ</th>
+        </tr></thead>
+        <tbody id="histBody"></tbody>
+      </table>
+    </div>
+    <p class="hint" id="histHint">กำลังโหลด...</p>
+  </div>
+
   <!-- เครือข่าย -->
   <div class="card" style="margin-bottom:16px">
     <h3>เครือข่าย</h3>
@@ -387,6 +430,9 @@ const GRADE   = [
   {k:'watch',mark:'!',      t:'ควรเฝ้าระวัง',  d:'มีค่าที่เริ่มออกนอกช่วงที่ต้องการ'},
   {k:'bad',  mark:'✕', t:'คุณภาพน้ำผิดปกติ', d:'ต้องแก้ไขทันที'}
 ];
+// ---- ตารางข้อมูลย้อนหลัง : /api/history ส่งคำตัดสินมาเป็นข้อความ GOOD/WATCH/BAD ----
+const VERDICT_CLASS = {GOOD:'v-good', WATCH:'v-watch', BAD:'v-bad'};
+const VERDICT_TH    = {GOOD:'ดี',     WATCH:'เฝ้าระวัง', BAD:'ผิดปกติ'};
 let built = false;
 
 /* ---- วาดเกจ : แถบโซนสี + เข็มชี้ค่าปัจจุบัน ----
@@ -610,8 +656,38 @@ async function load(){
   document.getElementById('up').textContent = hh+' ชม. '+mm+' นาที';
 }
 
+// ----- ตารางข้อมูลย้อนหลัง : โหลดแยกจาก load() หลัก เพราะข้อมูลอัปเดตแค่ทุก 15 นาที -----
+// จึงไม่จำเป็นต้องดึงถี่ทุก 2 วินาทีเหมือนค่าตัวเลขสด ๆ
+async function loadHistory(){
+  const hint = document.getElementById('histHint');
+  const body = document.getElementById('histBody');
+  try {
+    const h = await (await fetch('/api/history')).json();
+    if (!h.rows || h.rows.length === 0) {
+      body.innerHTML = '';
+      hint.textContent = 'ยังไม่มีข้อมูลย้อนหลัง (บันทึกทุก 15 นาที ครั้งแรกหลังบูตจะบันทึกทันที)';
+      return;
+    }
+    // API ส่งเรียงเก่า -> ใหม่ กลับด้านให้แถวล่าสุดอยู่บนสุด อ่านง่ายกว่า
+    const rows = [...h.rows].reverse();
+    body.innerHTML = rows.map(r => {
+      const cls = VERDICT_CLASS[r.verdict] || '';
+      const th  = VERDICT_TH[r.verdict] || r.verdict;
+      return `<tr><td>${r.t}</td><td>${(+r.ph).toFixed(2)}</td><td>${(+r.ec).toFixed(0)}</td>`
+           + `<td>${(+r.wtemp).toFixed(1)}</td><td>${(+r.tds).toFixed(0)}</td>`
+           + `<td class="${cls}">${th}</td></tr>`;
+    }).join('');
+    hint.textContent = `แสดง ${rows.length} แถวล่าสุด (ไฟล์เก็บได้สูงสุด ~700 แถว ~7 วัน) `
+                      + `· ดาวน์โหลดข้อมูลเต็มด้วยปุ่ม Excel ด้านบน`;
+  } catch (e) {
+    hint.textContent = 'โหลดข้อมูลย้อนหลังไม่สำเร็จ ลองกดรีเฟรชอีกครั้ง';
+  }
+}
+
 load();
 setInterval(load, 2000);
+loadHistory();
+setInterval(loadHistory, 60000);   // ข้อมูลจริงอัปเดตทุก 15 นาที รีเฟรชทุก 1 นาทีก็เกินพอ
 </script>
 </body>
 </html>

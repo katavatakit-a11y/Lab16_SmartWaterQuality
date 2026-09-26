@@ -69,6 +69,7 @@
 #include <ModbusMaster.h>
 #include <ctype.h>
 #include <time.h>
+#include <LittleFS.h>        // เก็บประวัติเซนเซอร์ย้อนหลังเป็นไฟล์ CSV ในตัวบอร์ด (ไม่ต้องมีการ์ด SD)
 #include "pins_config.h"
 #include "dashboard_html.h"
 #include "fonts_data.h"      // ฟอนต์ Prompt ฝังใน flash ราว 62 KB
@@ -246,6 +247,19 @@ constexpr uint32_t TIME_INTERVAL_MS  = 250;
 constexpr uint32_t MQTT_RETRY_MS     = 5000;
 constexpr uint32_t STA_CHECK_MS      = 1000;    // ตรวจสถานะ WiFi บ้านทุกกี่ ms
 
+/* ---------------------- บันทึกประวัติเซนเซอร์ลง Flash ----------------------
+ * เก็บเป็นไฟล์ CSV บน LittleFS (พื้นที่ในตัว ESP32) ไม่ต้องมีการ์ด SD เพิ่ม
+ * บันทึกทุก 15 นาทีก็พอเห็นแนวโน้มแล้ว ถี่กว่านี้จะทำให้ flash สึกเร็วเกินไป
+ * (flash เขียนซ้ำได้ราว 100,000 ครั้ง/บล็อก) และไฟล์โตเร็วเกินจำเป็น
+ *
+ * แถวเก่าสุดถูกตัดทิ้งอัตโนมัติเมื่อไฟล์เกิน LOG_MAX_ROWS แถว
+ * กันไม่ให้ flash เต็มถ้าบอร์ดเปิดทิ้งไว้เป็นเดือน ๆ */
+constexpr uint32_t LOG_INTERVAL_MS  = 15UL * 60UL * 1000UL;  // 15 นาที
+constexpr uint16_t LOG_MAX_ROWS     = 700;   // ~7 วันที่ 15 นาที/แถว
+constexpr uint16_t HISTORY_VIEW_MAX = 100;   // ส่งให้หน้าเว็บดูย้อนหลังสูงสุดกี่แถวต่อครั้ง
+const char *LOG_FILE = "/history.csv";
+const char *LOG_HEADER = "time,temp,humi,rad,ph,ec,wtemp,tds,salt,verdict,r1,r2,r3\n";
+
 constexpr uint8_t  MAX_FAIL_STREAK   = 3;       // พลาดกี่ครั้งติดจึงเปลี่ยนเป็นโหมดจำลอง
 
 /* ตัวตัดอัตโนมัติกันรีเลย์ค้าง ใช้เฉพาะโหมด "สั่งเอง" เท่านั้น
@@ -417,7 +431,8 @@ uint32_t staRetryAt       = 0;
 
 
 // ============================== ตัวแปรสถานะ ===============================
-uint32_t dhtAt = 0, mbAt = 0, pubAt = 0, oledAt = 0, mqttRetryAt = 0, timeAt = 0;
+uint32_t dhtAt = 0, mbAt = 0, pubAt = 0, oledAt = 0, mqttRetryAt = 0, timeAt = 0, logAt = 0;
+bool fsReady = false;   // LittleFS เมาท์สำเร็จหรือไม่ ถ้าไม่สำเร็จข้ามการบันทึกประวัติทั้งหมด
 
 float temp = NAN, humi = NAN;                      // DHT11
 float soil = NAN;                                  // Modbus ID 1
@@ -1162,6 +1177,86 @@ void handleConfig() {
 }
 
 
+// ==================== API ประวัติเซนเซอร์ (ดูย้อนหลัง + Export) ===============
+
+// ตัดคอลัมน์ที่ idx (นับจาก 0) ออกจากบรรทัด CSV หนึ่งบรรทัด ไม่ปรับรูปแบบตัวเลขใด ๆ
+// ส่งค่ากลับเป็น string เดิมตรง ๆ ประหยัดกว่าแปลงเป็น float แล้วพิมพ์กลับ
+String csvField(const String &line, uint8_t idx) {
+  int start = 0;
+  for (uint8_t i = 0; i < idx; i++) {
+    int c = line.indexOf(',', start);
+    if (c < 0) return "";
+    start = c + 1;
+  }
+  int end = line.indexOf(',', start);
+  if (end < 0) end = line.length();
+  return line.substring(start, end);
+}
+
+/* หน้าเว็บเรียก endpoint นี้เพื่อวาดตารางย้อนหลัง
+ * อ่านทั้งไฟล์เพื่อเก็บเฉพาะ HISTORY_VIEW_MAX แถวล่าสุดด้วย ring buffer ของ String
+ * (ไฟล์เต็มที่มีได้ถึง LOG_MAX_ROWS แถว แต่ส่งให้เบราว์เซอร์แค่ล่าสุดพอ ไม่ให้ JSON ใหญ่เกิน) */
+void handleHistory() {
+  if (!fsReady) { server.send(200, "application/json", "{\"rows\":[]}"); return; }
+
+  File f = LittleFS.open(LOG_FILE, "r");
+  if (!f) { server.send(200, "application/json", "{\"rows\":[]}"); return; }
+
+  f.readStringUntil('\n');   // ข้าม header
+
+  static String ring[HISTORY_VIEW_MAX];
+  uint16_t idx = 0, count = 0;
+  while (f.available()) {
+    String line = f.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) continue;
+    ring[idx] = line;
+    idx = (idx + 1) % HISTORY_VIEW_MAX;
+    count++;
+  }
+  f.close();
+
+  uint16_t n     = (count < HISTORY_VIEW_MAX) ? count : HISTORY_VIEW_MAX;
+  uint16_t start = (count < HISTORY_VIEW_MAX) ? 0 : idx;   // ตำแหน่งแถวเก่าสุดที่เหลืออยู่
+
+  String j = "{\"rows\":[";
+  for (uint16_t k = 0; k < n; k++) {
+    const String &line = ring[(start + k) % HISTORY_VIEW_MAX];
+    if (k) j += ",";
+    j += "{\"t\":\""     + csvField(line, 0)  + "\",";
+    j += "\"temp\":"     + csvField(line, 1)  + ",";
+    j += "\"humi\":"     + csvField(line, 2)  + ",";
+    j += "\"rad\":"      + csvField(line, 3)  + ",";
+    j += "\"ph\":"       + csvField(line, 4)  + ",";
+    j += "\"ec\":"       + csvField(line, 5)  + ",";
+    j += "\"wtemp\":"    + csvField(line, 6)  + ",";
+    j += "\"tds\":"      + csvField(line, 7)  + ",";
+    j += "\"salt\":"     + csvField(line, 8)  + ",";
+    j += "\"verdict\":\""+ csvField(line, 9)  + "\",";
+    j += "\"r1\":"       + csvField(line, 10) + ",";
+    j += "\"r2\":"       + csvField(line, 11) + ",";
+    j += "\"r3\":"       + csvField(line, 12) + "}";
+  }
+  j += "]}";
+
+  server.send(200, "application/json", j);
+}
+
+/* ส่งไฟล์ CSV ทั้งไฟล์ให้ดาวน์โหลดตรง ๆ (แถวเต็ม ไม่ตัดเหมือน /api/history)
+ * ตั้งใจใช้ .csv เพราะ ESP32 ไม่มีไลบรารีสร้างไฟล์ .xlsx (binary/zip) จริง ๆ
+ * Excel เปิดไฟล์ .csv ได้ตรง ๆ อยู่แล้วโดยไม่ต้องแปลง จึงไม่ต้องเสี่ยงสร้างไฟล์ผิดรูปแบบ */
+void handleExportCsv() {
+  if (!fsReady || !LittleFS.exists(LOG_FILE)) {
+    server.send(404, "text/plain", "no history data yet");
+    return;
+  }
+  File f = LittleFS.open(LOG_FILE, "r");
+  server.sendHeader("Content-Disposition", "attachment; filename=waterquality_history.csv");
+  server.streamFile(f, "text/csv");
+  f.close();
+}
+
+
 // ========================= งานที่ 3 : ส่งขึ้น MQTT =========================
 void taskPublish(uint32_t now) {
   if (now - pubAt < PUBLISH_INTERVAL) return;
@@ -1219,6 +1314,95 @@ void taskPublish(uint32_t now) {
            WiFi.RSSI(), now / 1000);
 
   if (mqtt.publish(TOPIC_STATUS, bufJson)) pubCount++;
+}
+
+
+// ==================== บันทึกประวัติเซนเซอร์ลง Flash (LittleFS) =================
+/* เก็บเป็นไฟล์ CSV เดียว /history.csv บันทึกทุก LOG_INTERVAL_MS (15 นาที)
+ * แถวแรกเป็น header คอลัมน์ ให้ตรงกับลำดับที่ logHistoryRow() เขียนเสมอ */
+
+void initHistoryLog() {
+  /* true = ให้ format เองอัตโนมัติถ้า mount ไม่สำเร็จ (การ์ดใหม่/พังครั้งแรก)
+   * ถ้าบอร์ดยังไม่เคยเลือก Partition Scheme ที่มี LittleFS ไว้ mount จะไม่สำเร็จเลย
+   * ดูวิธีตั้งใน README.md หัวข้อ "เริ่มใช้งาน" */
+  fsReady = LittleFS.begin(true);
+  if (!fsReady) return;
+
+  if (!LittleFS.exists(LOG_FILE)) {
+    File f = LittleFS.open(LOG_FILE, "w");
+    if (f) { f.print(LOG_HEADER); f.close(); }
+  }
+}
+
+/* ตัดไฟล์ CSV ให้เหลือแค่ header + แถวล่าสุด LOG_MAX_ROWS แถว
+ * โหลดทั้งไฟล์เข้า RAM ครั้งเดียว (ไฟล์เล็กมาก ~50 KB ที่ค่าเริ่มต้น) แล้วเขียนทับ
+ * เรียกเฉพาะตอนแถวเกินเท่านั้น ไม่ได้ทำงานทุกครั้งที่บันทึก จึงไม่กระทบประสิทธิภาพ */
+void trimHistoryIfNeeded() {
+  File f = LittleFS.open(LOG_FILE, "r");
+  if (!f) return;
+  String content = f.readString();
+  f.close();
+
+  int firstNL = content.indexOf('\n');
+  if (firstNL < 0) return;                    // ไฟล์เสีย ไม่มี header เลย ไม่ต้องยุ่ง
+  String header = content.substring(0, firstNL + 1);
+  String body   = content.substring(firstNL + 1);
+
+  uint32_t rows = 0;
+  for (uint32_t i = 0; i < body.length(); i++) if (body[i] == '\n') rows++;
+  if (rows <= LOG_MAX_ROWS) return;
+
+  uint32_t toDrop = rows - LOG_MAX_ROWS;
+  uint32_t idx = 0, dropped = 0;
+  while (dropped < toDrop) {
+    int nl = body.indexOf('\n', idx);
+    if (nl < 0) break;
+    idx = nl + 1;
+    dropped++;
+  }
+
+  File out = LittleFS.open(LOG_FILE, "w");
+  if (!out) return;
+  out.print(header);
+  out.print(body.substring(idx));
+  out.close();
+}
+
+// เขียนแถวใหม่ 1 แถวต่อท้ายไฟล์ ด้วยค่าปัจจุบันของทุกเซนเซอร์และสถานะรีเลย์
+void logHistoryRow() {
+  if (!fsReady) return;
+
+  char tbuf[24];
+  timeStampFull(tbuf, sizeof(tbuf));
+
+  char line[200];
+  snprintf(line, sizeof(line),
+           "%s,%.1f,%.1f,%.0f,%.2f,%.1f,%.1f,%.1f,%.1f,%s,%d,%d,%d\n",
+           tbuf,
+           isnan(temp)   ? 0.0 : temp,
+           isnan(humi)   ? 0.0 : humi,
+           isnan(rad)    ? 0.0 : rad,
+           isnan(wqPh)   ? 0.0 : wqPh,
+           isnan(wqEc)   ? 0.0 : wqEc,
+           isnan(wqTemp) ? 0.0 : wqTemp,
+           isnan(wqTds)  ? 0.0 : wqTds,
+           isnan(wqSalt) ? 0.0 : wqSalt,
+           gradeName(gradeOverall()),
+           relays[0].on ? 1 : 0, relays[1].on ? 1 : 0, relays[2].on ? 1 : 0);
+
+  File f = LittleFS.open(LOG_FILE, "a");
+  if (!f) return;
+  f.print(line);
+  f.close();
+
+  trimHistoryIfNeeded();
+}
+
+void taskLogHistory(uint32_t now) {
+  if (!fsReady) return;
+  if (now - logAt < LOG_INTERVAL_MS) return;
+  logAt = now;
+  logHistoryRow();
 }
 
 
@@ -1721,6 +1905,11 @@ void setup() {
   dht.begin();
   loadConfig();
 
+  // ---------- ประวัติเซนเซอร์ (LittleFS) ----------
+  initHistoryLog();
+  logHistoryRow();     // บันทึกทันที 1 แถวตอนบูต ให้เห็นข้อมูลในตารางได้ทันทีไม่ต้องรอ 15 นาที
+  logAt = millis();    // แถวถัดไปจะห่างจากนี้ไปอีกเต็ม LOG_INTERVAL_MS
+
   // ---------- WiFi : เปิด AP ของบอร์ดก่อนเป็นอันดับแรก ----------
   /* ต่อชื่อ AP ด้วยเลข 4 หลักท้ายของ MAC เพื่อไม่ให้บอร์ดหลายตัวชื่อซ้ำกัน
    * MAC ของแต่ละชิปไม่ซ้ำกันทั่วโลก จึงเป็นตัวเลขเฉพาะที่เชื่อถือได้ */
@@ -1775,10 +1964,12 @@ void setup() {
   // ---------- Web Server ----------
   /* ไม่ระบุ method ให้รับได้ทั้ง GET และ POST
    * ทดสอบจากช่อง URL ของเบราว์เซอร์ได้ตรง ๆ เช่น /api/relay?id=1&state=on */
-  server.on("/",           handleRoot);
-  server.on("/api/status", handleStatus);
-  server.on("/api/relay",  handleRelayCmd);
-  server.on("/api/config", handleConfig);
+  server.on("/",            handleRoot);
+  server.on("/api/status",  handleStatus);
+  server.on("/api/relay",   handleRelayCmd);
+  server.on("/api/config",  handleConfig);
+  server.on("/api/history", handleHistory);   // ตารางย้อนหลังบนหน้าเว็บ (จำกัด HISTORY_VIEW_MAX แถวล่าสุด)
+  server.on("/api/export",  handleExportCsv); // ปุ่มดาวน์โหลด Excel (.csv) ทั้งไฟล์
 
   // ไฟล์ฟอนต์ Prompt จาก PROGMEM ชื่อต้องตรงกับ @font-face ใน dashboard_html.h
   server.on("/fonts/prompt-400-thai.woff2",  handleFont400Thai);
@@ -1811,5 +2002,6 @@ void loop() {
   taskControl();          // ตรรกะควบคุม 3 โหมด
   taskRelayFailsafe();
   taskPublish(now);
+  taskLogHistory(now);    // บันทึกประวัติเซนเซอร์ลง Flash ทุก 15 นาที
   taskDisplay(now);
 }
