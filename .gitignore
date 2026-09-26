@@ -1,0 +1,18 @@
+# --- Secrets (WiFi / MQTT ของจริง) ---
+secrets.h
+
+# --- Arduino IDE / build artifacts ---
+*.hex
+*.bin
+*.elf
+*.map
+build/
+.pio/
+.pioenvs/
+.piolibdeps/
+
+# --- OS / editor cruft ---
+.DS_Store
+Thumbs.db
+*.swp
+.vscode/
