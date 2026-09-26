@@ -1462,17 +1462,14 @@ void pgTemp(uint32_t now) {
 void pgEnv(uint32_t now) {
   char b[16];
 
-  snprintf(b, sizeof(b), "%.0f %%", isnan(soil) ? 0 : soil);
-  uiKV(15, "Soil moisture", b);
-
   snprintf(b, sizeof(b), "%.0f W/m2", isnan(rad) ? 0 : rad);
-  uiKV(27, "Solar", b);
+  uiKV(20, "Solar", b);
 
   snprintf(b, sizeof(b), "%.1f C", isnan(temp) ? 0 : temp);
-  uiKV(39, "Air temp", b);
+  uiKV(34, "Air temp", b);
 
   snprintf(b, sizeof(b), "%.0f %%RH", isnan(humi) ? 0 : humi);
-  uiKV(47, "Air humidity", b);
+  uiKV(48, "Air humidity", b);
 }
 
 /* หน้าชุดปรับคุณภาพน้ำ : รีเลย์ 3 ตัวพร้อมบทบาทจริง
@@ -1514,10 +1511,14 @@ void pgDosing(uint32_t now) {
 }
 
 // หน้าสถานะเซนเซอร์ : ดูว่าตัวไหนอ่านได้จริงและสายมีปัญหาหรือไม่
+// ไม่แสดงความชื้นดิน (MB_SOIL) เพราะไม่ใช่ค่าที่ใช้ในหน้าจอนี้แล้ว
 void pgSensor(uint32_t now) {
   oled.setTextSize(1);
+  uint8_t row = 0;
   for (uint8_t i = 0; i < MB_COUNT; i++) {
-    int16_t y = 14 + i * 12;
+    if (i == MB_SOIL) continue;
+    int16_t y = 14 + row * 12;
+    row++;
     char bo[8], be[8];
     fmtCnt(bo, sizeof(bo), mbDev[i].okCount);
     fmtCnt(be, sizeof(be), mbDev[i].errCount);

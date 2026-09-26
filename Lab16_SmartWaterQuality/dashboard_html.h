@@ -329,7 +329,6 @@ footer{text-align:center;color:var(--dim);font-size:.74rem;padding:22px 0 8px}
     <div class="card">
       <h3>สภาพแวดล้อม</h3>
       <div class="rows">
-        <div class="row2"><span>ความชื้นดิน</span><b id="eSoil">--</b></div>
         <div class="row2"><span>ความเข้มแสงอาทิตย์</span><b id="eRad">--</b></div>
         <div class="row2"><span>อุณหภูมิอากาศ</span><b id="eTemp">--</b></div>
         <div class="row2"><span>ความชื้นอากาศ</span><b id="eHumi">--</b></div>
@@ -338,7 +337,7 @@ footer{text-align:center;color:var(--dim);font-size:.74rem;padding:22px 0 8px}
     <div class="card">
       <h3>สถานะเซนเซอร์</h3>
       <div class="rows" id="sensors"></div>
-      <p class="hint">เซนเซอร์ทั้ง 3 ตัวอยู่บนสาย RS-485 เส้นเดียว อ่านทีละตัววนรอบทุก 2 วินาที</p>
+      <p class="hint">เซนเซอร์อยู่บนสาย RS-485 เส้นเดียว อ่านทีละตัววนรอบทุก 2 วินาที</p>
     </div>
   </div>
 
@@ -527,7 +526,6 @@ async function load(){
   // ----- แถบเตือนโหมดจำลอง -----
   const miss = [];
   if(!d.wqReal)   miss.push('คุณภาพน้ำ (ID3)');
-  if(!d.soilReal) miss.push('ความชื้นดิน (ID1)');
   if(!d.radReal)  miss.push('ความเข้มแสง (ID2)');
   if(!d.dhtReal)  miss.push('DHT11');
   document.getElementById('simbar').classList.toggle('show', miss.length>0);
@@ -550,14 +548,12 @@ async function load(){
   document.getElementById('vRatio').textContent = d.ec > 0 ? (d.tds/d.ec).toFixed(2) : '--';
 
   // ----- สภาพแวดล้อม -----
-  document.getElementById('eSoil').textContent = d.soil.toFixed(0) + ' %';
   document.getElementById('eRad').textContent  = d.rad.toFixed(0) + ' W/m²';
   document.getElementById('eTemp').textContent = d.temp.toFixed(1) + ' °C';
   document.getElementById('eHumi').textContent = d.humi.toFixed(0) + ' %RH';
 
   // ----- สถานะเซนเซอร์ -----
   const S = [
-    ['ID1 ความชื้นดิน', d.soilReal, d.soilOk, d.soilErr, d.soilErrCode],
     ['ID2 ความเข้มแสง', d.radReal,  d.radOk,  d.radErr,  d.radErrCode],
     ['ID3 คุณภาพน้ำ',   d.wqReal,   d.wqOk,   d.wqErr,   d.wqErrCode]
   ];
